@@ -4,6 +4,7 @@ services:
   - type: web
     name: day14-agent
     runtime: docker
+    region: singapore
     rootDir: 06-lab-complete
     dockerfilePath: ./Dockerfile
     dockerContext: .
@@ -18,6 +19,8 @@ services:
         value: "10"
       - key: DAILY_BUDGET_USD
         value: "1.0"
+      - key: MONTHLY_BUDGET_USD
+        value: "10.0"
       - key: REDIS_URL
         fromService:
           type: keyvalue
@@ -26,6 +29,7 @@ services:
 
   - type: keyvalue
     name: day14-redis
+    region: singapore             # phải cùng region với web service để dùng Internal URL
     plan: free
     maxmemoryPolicy: noeviction   # không tự xoá key rate limit / cost khi đầy bộ nhớ
     ipAllowList: []               # chỉ service nội bộ của Render truy cập được

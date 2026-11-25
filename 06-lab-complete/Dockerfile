@@ -5,7 +5,7 @@
 # ============================================================
 
 # ── Stage 1: builder — cài dependencies vào một virtualenv riêng ──
-FROM python:3.11-slim AS builder
+FROM python:3.11-slim as builder
 
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
@@ -18,7 +18,7 @@ RUN python -m venv /opt/venv \
 
 
 # ── Stage 2: runtime — chỉ chứa Python + venv + code ──
-FROM python:3.11-slim AS runtime
+FROM python:3.11-slim as runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

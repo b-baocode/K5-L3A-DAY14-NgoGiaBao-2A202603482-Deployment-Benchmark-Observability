@@ -20,7 +20,7 @@ from typing import Optional
 import redis
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.auth import verify_api_key
 from app.config import settings
@@ -100,8 +100,8 @@ async def lifespan(app: FastAPI):
     yield
     _state["shutting_down"] = True  # /ready → 503 để load balancer ngừng gửi traffic mới
     r.close()
-    logger.info("agent stopped", extra={"event": "shutdown",
-                                         "uptime_s": round(time.time() - START_TIME, 1)})
+    logger.info("graceful shutdown complete", extra={"event": "shutdown",
+                                                      "uptime_s": round(time.time() - START_TIME, 1)})
 
 
 app = FastAPI(title="Production AI Agent", version=settings.app_version, lifespan=lifespan,
@@ -114,7 +114,8 @@ app = FastAPI(title="Production AI Agent", version=settings.app_version, lifespa
 # ─────────────────────────────────────────────────────────
 @app.middleware("http")
 async def access_log(request: Request, call_next):
-    request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:16]
+    # Giới hạn độ dài: header do client gửi, không tin tưởng (tránh log bị bơm dữ liệu rác)
+    request_id = (request.headers.get("X-Request-ID") or uuid.uuid4().hex[:16])[:64]
     started = time.perf_counter()
     try:
         response = await call_next(request)
@@ -145,8 +146,12 @@ async def redis_unavailable(request: Request, exc: redis.RedisError):
 # Health & readiness (tiêu chí 4, 5)
 # ─────────────────────────────────────────────────────────
 @app.get("/health")
-def health():
-    """Liveness: process còn sống là 200 — KHÔNG phụ thuộc Redis (Redis chết thì restart agent cũng vô ích)."""
+async def health():
+    """Liveness: process còn sống là 200 — KHÔNG phụ thuộc Redis (Redis chết thì restart agent cũng vô ích).
+
+    `async def` vì không có I/O chặn: chạy thẳng trên event loop, không phải xếp hàng chờ threadpool
+    cùng các request /ask chậm → health check vẫn trả lời nhanh khi tải cao.
+    """
     return {
         "status": "ok",
         "version": settings.app_version,
@@ -169,6 +174,8 @@ def ready():
 # Agent endpoint (tiêu chí 6, 7, 8)
 # ─────────────────────────────────────────────────────────
 class AskRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)  # "   " → "" → bị min_length chặn (422)
+
     question: str = Field(..., min_length=1, max_length=2000)
     user_id: Optional[str] = Field(default=None, max_length=128)
 

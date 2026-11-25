@@ -26,6 +26,9 @@ RUN chown -R agent:agent /app
 USER agent
 
 ENV PATH=/home/agent/.local/bin:$PATH
+# Sửa lỗi crash "No module named 'uvicorn'": user agent có HOME=/app (useradd -d /app) nên Python
+# tìm user site-packages ở /app/.local, trong khi package được copy vào /home/agent/.local.
+ENV PYTHONUSERBASE=/home/agent/.local
 ENV PYTHONPATH=/app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1

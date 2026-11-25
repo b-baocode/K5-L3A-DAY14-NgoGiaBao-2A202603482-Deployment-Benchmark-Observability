@@ -215,6 +215,66 @@ POST http://localhost/ask {"question":"Explain microservices"} → 200
 
 ---
 
+## Part 3: Cloud Deployment
+
+> Lớp K5 deploy chính agent Part 6 (`06-lab-complete/`) sau khi đạt `PASS 12/12` (CP6). Chi tiết lệnh test và biến môi trường: [DEPLOYMENT.md](DEPLOYMENT.md).
+
+### Exercise 3.1 / 3.2: Deploy (nền tảng chính: Render)
+
+- **URL:** https://k5-l3a-day14-ngogiabao-2a202603482.onrender.com
+- **Nền tảng:** Render. Web Service chạy Docker (Root Directory `06-lab-complete`, Health Check Path `/health`) và Key Value (Redis), đều ở gói Free, cùng region. Agent kết nối Redis qua Internal URL.
+- **Vì sao không dùng Railway:** tài khoản Railway báo *"Trial expired — All deployments have been paused. To resume deployments, upgrade to a paid plan."* Theo RULES, mình dùng gói miễn phí của Render thay vì nhập thẻ thanh toán. RUBRIC cho phép chọn Railway **hoặc** Render.
+- **Biến môi trường đặt trên Render** (không có trong code): `AGENT_API_KEY`, `REDIS_URL`, `ENVIRONMENT=production`, `RATE_LIMIT_PER_MINUTE=10`, `DAILY_BUDGET_USD=1.0`. `PORT` do Render tự cấp.
+- **Ảnh chụp:** [dashboard](screenshots/dashboard.png), [running](screenshots/running.png), [test](screenshots/test.png)
+
+Bốn lệnh tự kiểm ở CP6 (chỉ in mã HTTP):
+
+```
+$ curl -sS -o /dev/null -w '%{http_code}\n' "$BASE/health"                     → 200
+$ curl -sS -o /dev/null -w '%{http_code}\n' "$BASE/ready"                      → 200
+$ curl ... -X POST "$BASE/ask" -d '{"question":"Hello"}'                        → 401   (không có key)
+$ curl ... -X POST "$BASE/ask" -H "X-API-Key: $AGENT_API_KEY" -d '{"question":"Hello"}' → 200
+```
+
+Kiểm tra thêm trên URL public:
+- `/ask` đầy đủ → 200 `{"answer":"Deployment là quá trình...","usage":{"input_tokens":4,"output_tokens":19,"cost_usd":1.2e-05,"requests_remaining":8}}`
+- `{"question":""}` → 422 `string_too_short`
+- Key sai → 401
+- `/docs` → 404 (tắt khi `ENVIRONMENT=production`)
+- 12 request liên tiếp → `200 ×8, 429 ×4`, kèm `retry-after: 55`, `x-ratelimit-limit: 10`
+- `check_production_ready.py --public-url ...` → `✅ Public URL: GET .../health → 200`
+
+**Sự cố khi deploy và cách xử lý:**
+1. Lần deploy đầu báo `Root directory "06-lab-complet" does not exist`, do gõ thiếu chữ `e`. Sửa Root Directory trong Settings thành `06-lab-complete`, rồi chọn *Manual Deploy*.
+2. Key đúng vẫn bị 401, vì giá trị `AGENT_API_KEY` dán trên Render không khớp (dư hoặc thiếu ký tự khi copy). Dán lại đúng giá trị thì `/ask` trả 200. App vẫn khởi động được trong lúc key sai, vì key không rỗng; chỉ khi rỗng thì `validate()` mới dừng app ở chế độ production. Sau sự cố này, `config.py` được sửa để tự `strip()` khoảng trắng và xuống dòng thừa ở mọi biến môi trường.
+
+### Nền tảng còn lại: so sánh `railway.toml` và `render.yaml`
+
+So sánh bản mình viết cho agent Part 6 (`06-lab-complete/`), có đối chiếu bản mẫu trong `03-cloud-deployment/`:
+
+| Tiêu chí | `railway.toml` | `render.yaml` |
+|---|---|---|
+| Định dạng, phạm vi | TOML, mô tả **một service**: cách build và cách deploy service đó | YAML Blueprint, mô tả **toàn bộ hạ tầng**: nhiều service (web và Key Value/Redis) cùng liên kết giữa chúng |
+| Build | `builder = "DOCKERFILE"` + `dockerfilePath`. Bản mẫu Part 3 dùng `NIXPACKS` (tự nhận diện Python) | `runtime: docker` + `rootDir`, `dockerfilePath`, `dockerContext`. Bản mẫu Part 3 dùng `runtime: python` + `buildCommand` |
+| Lệnh chạy | Không khai báo; dùng `CMD` trong Dockerfile. Bản mẫu có `startCommand = "uvicorn ... --port $PORT"` | Giống bên trái. Bản mẫu có `startCommand: uvicorn ... --port $PORT` |
+| Health check | `healthcheckPath = "/health"`, `healthcheckTimeout` | `healthCheckPath: /health` |
+| Restart | `restartPolicyType = "ON_FAILURE"`, `restartPolicyMaxRetries = 3` | Không có tuỳ chọn; Render tự restart khi health check fail |
+| Biến môi trường, secret | **Không** nằm trong file; đặt bằng dashboard hoặc `railway variables set` | Khai báo **tên** biến trong file. Secret dùng `sync: false` (nhập tay trên dashboard) hoặc `generateValue: true` (Render tự sinh). Biến thường có thể ghi `value` |
+| Redis | Thêm Redis trong project Railway (plugin/template), rồi tham chiếu biến `${{Redis.REDIS_URL}}` trên dashboard; không khai báo được trong `railway.toml` | Khai báo ngay trong file: `type: keyvalue` (bản mẫu cũ dùng `type: redis`), nối vào web bằng `fromService: {type: keyvalue, property: connectionString}` |
+| Region, gói | Không có trong file (chọn trên dashboard) | `region: singapore`, `plan: free` khai báo trong file, cho cả web lẫn Key Value |
+| Cách dùng | `railway up` đẩy code **từ máy** lên (không cần GitHub), hoặc nối repo GitHub | Render **chỉ** deploy từ Git: New → Blueprint đọc `render.yaml`, hoặc tạo service thủ công |
+
+**Vì sao khác nhau:** Railway tách phần *cấu hình build/deploy* (lưu trong file) khỏi phần *hạ tầng và biến môi trường* (quản lý trên dashboard hoặc CLI), nên `railway.toml` ngắn và chỉ nói về một service. Render theo hướng **Infrastructure as Code**: một file `render.yaml` dựng lại được toàn bộ hệ thống (web, Redis, liên kết giữa chúng, region, gói), nên file dài hơn và cần cơ chế `sync: false`/`generateValue` để vẫn không ghi secret vào Git. Trong lần deploy này mình tạo service Render bằng tay thay vì dùng Blueprint, vì `render.yaml` nằm trong thư mục con (`06-lab-complete/`) chứ không ở gốc repo.
+
+### Exercise 3.3: Pipeline CI/CD Cloud Run (`cloudbuild.yaml`, `service.yaml`)
+
+- `cloudbuild.yaml` là pipeline Cloud Build gồm 4 bước, chạy khi push lên `main`. **test** chạy `pip install` + `pytest tests/` trong `python:3.11-slim`. Nếu test đạt thì **build** image Docker, gắn 2 tag (`$COMMIT_SHA` và `latest`) và dùng `--cache-from` để tận dụng layer cache. Tiếp theo **push** image lên Container Registry. Cuối cùng **deploy** bằng `gcloud run deploy`, đúng image theo `$COMMIT_SHA`, region `asia-southeast1`, 512Mi / 1 CPU, `min-instances=1` để tránh cold start, `max-instances=10`. `ENVIRONMENT` đặt bằng `--set-env-vars`, còn `OPENAI_API_KEY` lấy từ **Secret Manager** (`--set-secrets`).
+- Các bước nối nhau bằng `waitFor` (test → build → push → deploy): bước trước fail thì pipeline dừng, code lỗi không lên production được. Image gắn theo commit SHA nên biết chính xác bản nào đang chạy và rollback được.
+- `service.yaml` mô tả cùng service đó theo dạng Knative (IaC; áp dụng bằng `gcloud run services replace`): autoscale 1–10 instance, mỗi instance tối đa 80 request đồng thời, timeout 60s, `livenessProbe` gọi `/health`, `startupProbe` gọi `/ready`, và secret `OPENAI_API_KEY`/`AGENT_API_KEY` lấy qua `secretKeyRef`.
+- Nhận xét: repo mẫu không có thư mục `tests/`, nên bước `pytest tests/` sẽ fail và chặn cả pipeline. Muốn dùng thật thì phải thêm test.
+
+---
+
 ## Part 4: API Security
 
 ### Exercise 4.1: API key authentication (`04-api-gateway/develop/app.py`)
@@ -580,7 +640,7 @@ Chạy **bản đầy đủ** (có Docker, không `--skip-docker`) trong WSL2 Ub
 ```
 
 Một số dòng chi tiết đáng chú ý trong output:
-- `Docker: image < 500 MB — 183 MB`
+- `Docker: image < 500 MB — 183 MB` (script chia cho 1024², tức 183 MiB; xem ghi chú đơn vị bên dưới)
 - `429 sau 5 request thành công (RATE_LIMIT_PER_MINUTE=5)`
 - `state nằm trong Redis — restart agent vẫn bị 429`
 - `402 ở request thứ 1`
@@ -598,7 +658,7 @@ Mốc ban đầu (bản khung chưa sửa): `0/12 tiêu chí đạt · 5/24 chec
 | `app/redis_client.py` | `redis.from_url(...)` chỉ tạo connection pool, **không kết nối lúc import**, nên container khởi động được khi chưa có Redis. Timeout kết nối 1s và timeout đọc/ghi 2s. `redis_healthy()` gọi `PING`. |
 | `app/auth.py` | `APIKeyHeader("X-API-Key", auto_error=False)` để thiếu header thì hàm tự trả **401** (không để FastAPI trả 403). So sánh bằng `hmac.compare_digest` để tránh timing attack. Key rỗng thì từ chối tất cả. |
 | `app/rate_limiter.py` | Sliding window 60s bằng **Redis sorted set** `ratelimit:<sha256(key)>`. Pipeline `MULTI` gồm `ZREMRANGEBYSCORE`, `ZADD`, `ZCARD`, `EXPIRE`. Vượt giới hạn thì `ZREM` request vừa thêm (request bị từ chối không tính vào quota), trả **429** kèm `Retry-After` tính từ request cũ nhất trong cửa sổ. Không lưu API key gốc trong Redis, chỉ lưu hash. |
-| `app/cost_guard.py` | Chi phí cộng bằng `INCRBYFLOAT` vào `cost:day:<YYYY-MM-DD>` (TTL 2 ngày) và `cost:month:<YYYY-MM>` (TTL 32 ngày); sang ngày hay tháng mới thì dùng key mới, nên ngân sách tự reset. `check_budget()` trả **402** khi chi phí trong ngày ≥ `DAILY_BUDGET_USD`, hoặc chi phí trong tháng ≥ `MONTHLY_BUDGET_USD` nếu biến này > 0. Số token ước lượng bằng số ký tự chia 4, vì mock LLM không trả số token. |
+| `app/cost_guard.py` | Chi phí cộng bằng `INCRBYFLOAT` vào `cost:day:<YYYY-MM-DD>` (TTL 2 ngày) và `cost:month:<YYYY-MM>` (TTL 32 ngày); sang ngày hay tháng mới thì dùng key mới, nên ngân sách tự reset. `check_budget()` trả **402** khi chi phí trong ngày ≥ `DAILY_BUDGET_USD`, hoặc chi phí trong tháng ≥ `MONTHLY_BUDGET_USD` (mặc định $10, đặt 0 để tắt). Đây là ngân sách **chung của cả service**, không tách theo user, vì `/ask` chỉ có một API key. Số token ước lượng bằng số ký tự chia 4, vì mock LLM không trả số token. |
 | `app/main.py` | `JsonFormatter` tự viết, `logging.basicConfig(..., force=True)` để tránh lỗi đã gặp ở Part 1. Middleware gắn `X-Request-ID` và ghi access log dạng JSON. `/health` không phụ thuộc Redis. `/ready` kiểm tra Redis và cờ đang tắt. `/ask` khai báo `def`, không phải `async def` (bài học Part 5), theo thứ tự: auth → rate limit → budget → LLM → ghi chi phí. Handler `RedisError` trả **503**. Lỗi không lường trước trả **500** dạng JSON kèm `request_id`, traceback chỉ ghi vào log. Handler SIGTERM ghi log rồi gọi lại handler cũ. |
 | `Dockerfile` | Builder (`python:3.11-slim`) cài thư viện vào `/opt/venv`. Runtime (`python:3.11-slim`) chỉ copy venv và code, chạy bằng user `app` (non-root), có `HEALTHCHECK`. `CMD ["sh","-c","exec uvicorn ... --port ${PORT:-8000} --workers ${WEB_CONCURRENCY:-2}"]`: `exec` để uvicorn là **PID 1** và nhận SIGTERM. Dùng venv thay vì `pip --user`, nên không cần `PYTHONUSERBASE`. |
 | `docker-compose.yml` | `agent` (build `.`, `env_file: .env` với `required: false`, `REDIS_URL=redis://redis:6379/0`, `depends_on: redis: condition: service_healthy`) và `redis:7-alpine` (healthcheck `redis-cli ping`, AOF và volume để restart Redis không mất state). |
@@ -608,7 +668,9 @@ Mốc ban đầu (bản khung chưa sửa): `0/12 tiêu chí đạt · 5/24 chec
 
 ### Kiểm tra thêm bằng `docker compose` (ngoài script chấm)
 
-Lệnh: `docker compose -p k5-day14-final up -d --build`. Image `k5-day14-final-agent:latest` nặng 192 MB.
+Lệnh: `docker compose -p k5-day14-final up -d --build`. Image `k5-day14-final-agent:latest` nặng 192 MB theo `docker images`.
+
+**Về đơn vị:** `docker images` tính MB thập phân (10⁶ byte), còn `check_production_ready.py` chia cho 1024² (MiB). 183 MiB × 1.048576 ≈ 192 MB, nên đây là **cùng một kích thước**, chỉ khác đơn vị. Cả hai đều nhỏ hơn 500 MB rất nhiều.
 
 ```
 /health                          → 200 {"status":"ok","version":"1.0.0","environment":"staging",...}
@@ -654,3 +716,6 @@ Log JSON mẫu:
 | 3 | Part 4 | Nhờ Claude Code chạy bản develop và production, lấy JWT, test rate limit, viết và test cost guard bằng Redis | Output 401/403/200/429, giải mã payload JWT, thí nghiệm restart, hàm `check_budget` dùng Redis kèm kết quả chạy | Tự đếm số lần 200 trước khi gặp 429. Restart server để xác nhận state nằm trong RAM. Mở client Redis mới để xác nhận state cost guard còn sau restart. Đọc lại code tìm lỗi `budget_remaining_usd`. |
 | 4 | Part 5 | Nhờ Claude Code test health check và SIGTERM trong WSL, giải thích vì sao request thứ 2 bị mất khi shutdown, chạy stack 3 instance và test stateless | Phân tích `async def` + `time.sleep` chặn event loop, 3 thí nghiệm A/B/C, output `test_stateless.py`, thí nghiệm tắt một instance | Tự so sánh thời gian 6s (tuần tự) và 3s (song song). Kiểm tra key `session:*` và TTL trực tiếp trong Redis. Đếm request của từng container bằng `docker logs`. |
 | 5 | Part 6 | Nhờ Claude Code đọc `check_production_ready.py` (không sửa), viết code cho các TODO trong `06-lab-complete/` và giải thích từng quyết định | Code `config`, `auth`, `redis_client`, `rate_limiter`, `cost_guard`, `main`, Dockerfile, compose, `.dockerignore`, `.env.example`, `railway.toml`, `render.yaml` | Chạy script chấm bản đầy đủ trong WSL: `PASS 12/12`. Tự test thêm bằng `docker compose`: 401/422/429/503, tắt Redis, `docker stop` (exit 0), kiểm tra PID 1 và user non-root, grep để chắc API key không xuất hiện trong log. |
+| 6 | Part 3 | Nhờ Claude Code hướng dẫn deploy lên Render (Railway hết hạn dùng thử), chẩn đoán lỗi Root Directory và lỗi 401, so sánh `railway.toml`/`render.yaml`, giải thích pipeline Cloud Run | Các bước tạo Key Value và Web Service, 4 lệnh CP6, bảng so sánh, mô tả pipeline | Tự tạo service trên Render dashboard, tự sửa Root Directory và dán lại `AGENT_API_KEY`. Chạy 4 lệnh CP6 trên URL public (200/200/401/200), test rate limit, chạy `check_production_ready.py --public-url`. |
+| 7 | Review toàn bài | Nhờ Claude Code tạo một sub agent review độc lập (chỉ đọc) đối chiếu bài làm với RUBRIC, SUBMISSION, INSTRUCTOR_GUIDE, RULES | Danh sách điểm cần sửa: đơn vị MB/MiB, `render.yaml` thiếu `region`, `MONTHLY_BUDGET_USD` không thống nhất, `/health` dùng chung threadpool, câu hỏi toàn khoảng trắng, `X-Request-ID` không giới hạn, grep "graceful"/"as builder" | Tự kiểm tra lại từng điểm trước khi sửa, rồi sửa code và tài liệu. Chạy lại script chấm đầy đủ: vẫn `PASS 12/12`. |
+| 8 | Part 7 | Nhờ Claude Code chạy load test, eval, sửa `KNOWLEDGE_BASE`, viết job CI, bật stack observability, làm thí nghiệm alert và lấy trace qua API Prometheus/Jaeger, điền `BENCHMARK_REPORT.md` | Số liệu load test và eval, hai entry KB mới, `.github/workflows/eval.yml`, sửa `PYTHONUSERBASE` trong `production/Dockerfile`, phát hiện lệnh benchmark mẫu thiếu `--no-deps`, thời gian firing của alert, phân tích thí nghiệm E | Tự chụp 4 ảnh Grafana/Jaeger/Prometheus. Chạy script đối chiếu: mọi số trong báo cáo khớp file JSON/CSV. Bỏ các lần chạy sai (100% lỗi 502; benchmark sai số instance; snapshot E không có tải) và chạy lại có xác minh. |
