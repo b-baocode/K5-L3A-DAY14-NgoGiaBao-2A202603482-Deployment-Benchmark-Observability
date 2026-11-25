@@ -89,4 +89,4 @@ python check_production_ready.py --public-url https://k5-l3a-day14-ngogiabao-2a2
 ## Screenshots
 - [Deployment dashboard](screenshots/dashboard.png)
 - [Service running](screenshots/running.png)
-- [Test results](screenshots/test.png)
+- [Test results](screenshots/test.png) — output dạng text: [screenshots/cp6-test.txt](screenshots/cp6-test.txt) (chạy lúc 25/11/2026 20:15:41, sau khi Render deploy commit `5a5d1a8`)

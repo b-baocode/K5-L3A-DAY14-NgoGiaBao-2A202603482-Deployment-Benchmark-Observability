@@ -1,0 +1,13 @@
+$ date
+2026-11-25 20:15:41 SEAST
+$ BASE=https://k5-l3a-day14-ngogiabao-2a202603482.onrender.com
+$ curl -sS -o /dev/null -w '%{http_code}\n' "$BASE/health"     # 200
+200
+$ curl -sS -o /dev/null -w '%{http_code}\n' "$BASE/ready"      # 200
+200
+$ curl -sS -o /dev/null -w '%{http_code}\n' -X POST "$BASE/ask" -H 'Content-Type: application/json' -d '{"question":"Hello"}'   # 401
+401
+$ curl -sS -o /dev/null -w '%{http_code}\n' -X POST "$BASE/ask" -H 'Content-Type: application/json' -H "X-API-Key: $AGENT_API_KEY" -d '{"question":"Hello"}'   # 200
+200
+$ curl -sS -X POST "$BASE/ask" -H 'Content-Type: application/json' -H "X-API-Key: $AGENT_API_KEY" -d '{"question":"What is deployment?"}'
+{"question":"What is deployment?","answer":"Deployment là quá trình đưa code từ máy bạn lên server để người khác dùng được.","usage":{"input_tokens":4,"output_tokens":19,"cost_usd":1.2e-05,"requests_remaining":8}}
